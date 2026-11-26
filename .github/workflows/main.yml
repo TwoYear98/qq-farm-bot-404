@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Checkout upstream source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: muyuewang/qq-farm-bot-404
-          ref: master
+          ref: main
           persist-credentials: false
 
       - name: Set up Docker Buildx
