@@ -22,6 +22,24 @@ jobs:
           ref: main
           persist-credentials: false
 
+      - name: Fix TypeScript declaration build
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          for p in Path("core").rglob("tsconfig*.json"):
+              text = p.read_text()
+              new = re.sub(
+                  r'("(?:declaration|declarationMap|emitDeclarationOnly)"\s*:\s*)true\b',
+                  r'\g<1>false',
+                  text
+              )
+              if new != text:
+                  p.write_text(new)
+                  print(f"Patched: {p}")
+          PY
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -48,7 +66,7 @@ jobs:
           push: true
           tags: ${{ steps.image.outputs.name }}:latest
           build-args: |
-            NPM_REGISTRY=https://registry.npmmirror.com/
+            NPM_REGISTRY=https://registry.npmjs.org/
             PNPM_VERSION=10.30.2
           cache-from: type=gha
           cache-to: type=gha,mode=max
