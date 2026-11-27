@@ -7,9 +7,12 @@ export type PlantingStrategy =
   | 'max_fert_exp'
   | 'max_profit'
   | 'max_fert_profit'
-  | 'bag_priority';
+  | 'bag_priority'
+  | 'task_priority';
 
-export type BagSeedFallbackStrategy = Exclude<PlantingStrategy, 'bag_priority'>;
+// 任务作物优先只决定"先种任务需要的种子"，后续补种仍走第二优先策略，
+// 因此它本身不能作为背包优先的回退项。
+export type BagSeedFallbackStrategy = Exclude<PlantingStrategy, 'bag_priority' | 'task_priority'>;
 
 export type FertilizerMode = 'both' | 'normal' | 'organic' | 'smart' | 'none' | 'normal_ripen' | 'organic_ripen';
 
@@ -91,6 +94,10 @@ export interface QuietHoursConfig {
 export interface AccountConfig {
   automation: AutomationConfig;
   plantingStrategy: PlantingStrategy;
+  /** 优先种植 2×2 作物（独立开关，可与任意策略叠加）。 */
+  prioritize2x2Crops: boolean;
+  /** 任务作物优先（独立开关，可与任意策略叠加；策略为 task_priority 时同样生效）。 */
+  prioritizeGrowthTasks: boolean;
   preferredSeedId: number;
   intervals: IntervalConfig;
   friendQuietHours: QuietHoursConfig;
@@ -113,6 +120,12 @@ export interface AccountConfig {
   bagSeedPriority: number[];
   /** 是否为明确排在前面的多格背包种子保留尚未连成布局的空地。 */
   bagSeedMultiLandReservationEnabled: boolean;
+  /** 背包种子优先级面板已见过的种子 ID（用于排序展示与新增种子识别）。 */
+  bagSeedKnownIds: number[];
+  /** 金虫放置：背包保留数量（低于该数量的金虫不投放）。 */
+  goldenBugKeepCount: number;
+  /** 金虫放置：单轮投放上限。 */
+  goldenBugRoundLimit: number;
   /** seedId -> 允许种植的土地类型。缺 key 视为不限制。 */
   bagSeedLandTypes: Record<string, FertilizerLandType[]>;
   bagSeedFallbackStrategy: BagSeedFallbackStrategy;
@@ -125,6 +138,8 @@ export interface AccountConfig {
 
 export interface OfflineReminder {
   channel: string;
+  /** 离线提醒是否附加重登录链接：none / qq_link / qr_link。 */
+  reloginUrlMode: string;
   endpoint: string;
   token: string;
   secret: string;
@@ -137,11 +152,22 @@ export interface UIConfig {
   theme: 'light' | 'dark';
 }
 
+export interface WxKickoutReloginConfig {
+  enabled: boolean;
+  /** 0 = 使用 5min → 30min → 1h → 3h 的递增退避。 */
+  delayMinutes: number;
+  /** 每日自动连回上限；0 = 不限次数，同时取消连续失败熔断。 */
+  dailyLimit: number;
+  /** 自定义延迟的绝对有效期 ISO 时间；空串 = 一直生效。 */
+  validUntil: string;
+}
+
 export interface LoginSettings {
   wechatQrLogin: boolean;
   qqQrLogin: boolean;
   napCatEndpoint: string;
   napCatSignature: string;
+  wxKickoutRelogin: WxKickoutReloginConfig;
 }
 
 export interface DeviceInfo {

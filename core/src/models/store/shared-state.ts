@@ -7,14 +7,15 @@ const { createConfigStorage } = require('./config-storage');
 const { storageError } = require('../../services/json-db');
 const { parseHourOfDay } = require('../../utils/hour-of-day');
 const { RANCH_AUTOMATION_DEFAULTS, normalizeRanchSetting, migrateRanchMarketAutomation } = require('../../config/ranch-automation');
+const { normalizeWxKickoutRelogin } = require('../../services/wx-login/reconnect-config');
 
 const STORE_FILE: string = getDataFile('store.json');
 const ACCOUNTS_FILE: string = getDataFile('accounts.json');
 const configStorage = createConfigStorage(STORE_FILE);
 const KNOWN_FRIEND_GIDS_DIR: string = getDataFile('known_friend_gids');
 
-const ALLOWED_PLANTING_STRATEGIES: PlantingStrategy[] = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
-const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: BagSeedFallbackStrategy[] = ALLOWED_PLANTING_STRATEGIES.filter((s): s is BagSeedFallbackStrategy => s !== 'bag_priority');
+const ALLOWED_PLANTING_STRATEGIES: PlantingStrategy[] = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority', 'task_priority'];
+const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: BagSeedFallbackStrategy[] = ALLOWED_PLANTING_STRATEGIES.filter((s): s is BagSeedFallbackStrategy => s !== 'bag_priority' && s !== 'task_priority');
 const PUSHOO_CHANNELS: Set<string> = new Set([
     'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
     'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
@@ -35,6 +36,7 @@ let accountFallbackConfig: AccountConfig;
 
 const DEFAULT_OFFLINE_REMINDER: OfflineReminder = {
     channel: 'webhook',
+    reloginUrlMode: 'none',
     endpoint: '',
     token: '',
     secret: '',
@@ -48,6 +50,12 @@ const DEFAULT_LOGIN_SETTINGS: LoginSettings = {
     qqQrLogin: false,
     napCatEndpoint: '',
     napCatSignature: '',
+    wxKickoutRelogin: {
+        enabled: true,
+        delayMinutes: 0,
+        dailyLimit: 5,
+        validUntil: '',
+    },
 };
 
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
@@ -92,12 +100,15 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         yishu_claim_commission: false,
         yishu_sell_fallback_own: false,
         yishu_scan_friend_limit: 20,
-        yishu_scan_interval_minutes: 30,
+        // 默认两小时比价一次：cmd 92 逐个查铺子比较重，间隔拉长可以少打网关。
+        yishu_scan_interval_minutes: 120,
         yishu_sell_min_count: 1,
-        // 空串 = 不限时段；填 "HH:MM" 就等过了这个点才卖。
-        yishu_sell_after_time: '',
+        // 默认 14:00 开始卖：这个点好友大多已分享、暴击加成齐全，报价更高；空串 = 不限时段（用户可显式选）。
+        yishu_sell_after_time: '14:00',
     },
     plantingStrategy: 'max_exp',
+    prioritize2x2Crops: false,
+    prioritizeGrowthTasks: false,
     preferredSeedId: 0,
     intervals: {
         farm: 2,
@@ -141,7 +152,10 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     fertilizerBuyCheckIntervalMinutes: 60,
     emailClaimHour: 10,
     bagSeedPriority: [],
+    bagSeedKnownIds: [],
     bagSeedMultiLandReservationEnabled: false,
+    goldenBugKeepCount: 0,
+    goldenBugRoundLimit: 24,
     bagSeedLandTypes: {},
     bagSeedFallbackStrategy: 'level',
     autoAcceptFriendMinLevel: 0,
@@ -340,6 +354,8 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         plantingStrategy: ALLOWED_PLANTING_STRATEGIES.includes(String(base.plantingStrategy || '') as PlantingStrategy)
             ? String(base.plantingStrategy) as PlantingStrategy
             : DEFAULT_ACCOUNT_CONFIG.plantingStrategy,
+        prioritize2x2Crops: base.prioritize2x2Crops !== undefined ? !!base.prioritize2x2Crops : DEFAULT_ACCOUNT_CONFIG.prioritize2x2Crops,
+        prioritizeGrowthTasks: base.prioritizeGrowthTasks !== undefined ? !!base.prioritizeGrowthTasks : DEFAULT_ACCOUNT_CONFIG.prioritizeGrowthTasks,
         preferredSeedId: Math.max(0, Number.parseInt(String(base.preferredSeedId), 10) || 0),
         plantBlacklist: rawPlantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(base.stealDelaySeconds) || 0)),
@@ -352,9 +368,12 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         fertilizerBuyCheckIntervalMinutes: Math.max(1, Math.min(1440, Number(base.fertilizerBuyCheckIntervalMinutes) || 30)),
         emailClaimHour: normalizeEmailClaimHour(base.emailClaimHour, DEFAULT_ACCOUNT_CONFIG.emailClaimHour),
         bagSeedPriority: normalizeBagSeedPriority(base.bagSeedPriority),
+        bagSeedKnownIds: normalizeBagSeedPriority(base.bagSeedKnownIds),
         bagSeedMultiLandReservationEnabled: base.bagSeedMultiLandReservationEnabled !== undefined
             ? !!base.bagSeedMultiLandReservationEnabled
             : DEFAULT_ACCOUNT_CONFIG.bagSeedMultiLandReservationEnabled,
+        goldenBugKeepCount: Math.max(0, Math.min(9999, Number(base.goldenBugKeepCount) || 0)),
+        goldenBugRoundLimit: Math.max(1, Math.min(100, Number(base.goldenBugRoundLimit) || 24)),
         bagSeedLandTypes: normalizeBagSeedLandTypes(base.bagSeedLandTypes),
         bagSeedFallbackStrategy: normalizeBagSeedFallbackStrategy(base.bagSeedFallbackStrategy),
         autoAcceptFriendMinLevel: normalizeAutoAcceptFriendMinLevel(base.autoAcceptFriendMinLevel, DEFAULT_ACCOUNT_CONFIG.autoAcceptFriendMinLevel),
@@ -394,7 +413,7 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
             } else if (k === 'yishu_scan_friend_limit') {
                 (cfg.automation as any)[k] = Math.max(1, Math.min(200, Number.parseInt(String(v), 10) || 60));
             } else if (k === 'yishu_scan_interval_minutes') {
-                (cfg.automation as any)[k] = Math.max(5, Math.min(720, Number.parseInt(String(v), 10) || 30));
+                (cfg.automation as any)[k] = Math.max(5, Math.min(720, Number.parseInt(String(v), 10) || 120));
             } else if (k === 'yishu_sell_min_count') {
                 (cfg.automation as any)[k] = Math.max(1, Math.min(10000, Number.parseInt(String(v), 10) || 1));
             } else if (k === 'yishu_sell_after_time') {
@@ -416,6 +435,13 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
 
     if (src.plantingStrategy && ALLOWED_PLANTING_STRATEGIES.includes(src.plantingStrategy)) {
         cfg.plantingStrategy = src.plantingStrategy;
+    }
+
+    if (src.prioritize2x2Crops !== undefined && src.prioritize2x2Crops !== null) {
+        cfg.prioritize2x2Crops = src.prioritize2x2Crops === true;
+    }
+    if (src.prioritizeGrowthTasks !== undefined && src.prioritizeGrowthTasks !== null) {
+        cfg.prioritizeGrowthTasks = src.prioritizeGrowthTasks === true;
     }
 
     if (src.preferredSeedId !== undefined && src.preferredSeedId !== null) {
@@ -514,6 +540,18 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         cfg.bagSeedPriority = normalizeBagSeedPriority(src.bagSeedPriority);
     }
 
+    if (src.bagSeedKnownIds !== undefined && src.bagSeedKnownIds !== null) {
+        cfg.bagSeedKnownIds = normalizeBagSeedPriority(src.bagSeedKnownIds);
+    }
+
+    if (src.goldenBugKeepCount !== undefined && src.goldenBugKeepCount !== null) {
+        cfg.goldenBugKeepCount = Math.max(0, Math.min(9999, Number(src.goldenBugKeepCount) || 0));
+    }
+
+    if (src.goldenBugRoundLimit !== undefined && src.goldenBugRoundLimit !== null) {
+        cfg.goldenBugRoundLimit = Math.max(1, Math.min(100, Number(src.goldenBugRoundLimit) || 24));
+    }
+
     if (src.bagSeedMultiLandReservationEnabled !== undefined && src.bagSeedMultiLandReservationEnabled !== null) {
         cfg.bagSeedMultiLandReservationEnabled = !!src.bagSeedMultiLandReservationEnabled;
     }
@@ -606,19 +644,14 @@ function loadGlobalConfig(): void {
             }
 
             if (data.loginSettings && typeof data.loginSettings === 'object') {
+                // 顶层字段的最终类型校验仍在 global-config 的 normalizeLoginSettings 中完成；
+                // 这里额外对新增的嵌套对象做范围/类型归一化，旧配置缺少 wxKickoutRelogin 时补齐默认值。
                 globalConfig.loginSettings = {
-                    wechatQrLogin: typeof data.loginSettings.wechatQrLogin === 'boolean'
-                        ? data.loginSettings.wechatQrLogin
-                        : DEFAULT_LOGIN_SETTINGS.wechatQrLogin,
-                    qqQrLogin: typeof data.loginSettings.qqQrLogin === 'boolean'
-                        ? data.loginSettings.qqQrLogin
-                        : DEFAULT_LOGIN_SETTINGS.qqQrLogin,
-                    napCatEndpoint: typeof data.loginSettings.napCatEndpoint === 'string'
-                        ? data.loginSettings.napCatEndpoint.trim()
-                        : DEFAULT_LOGIN_SETTINGS.napCatEndpoint,
-                    napCatSignature: typeof data.loginSettings.napCatSignature === 'string'
-                        ? data.loginSettings.napCatSignature.trim()
-                        : DEFAULT_LOGIN_SETTINGS.napCatSignature,
+                    ...DEFAULT_LOGIN_SETTINGS,
+                    ...data.loginSettings,
+                    wxKickoutRelogin: normalizeWxKickoutRelogin(
+                        data.loginSettings.wxKickoutRelogin || DEFAULT_LOGIN_SETTINGS.wxKickoutRelogin,
+                    ),
                 };
             }
 

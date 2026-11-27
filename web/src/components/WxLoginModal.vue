@@ -63,13 +63,18 @@ async function handleAutoAddAccount() {
     if (result.success && result.code) {
       const name = accountName.value.trim() || result.nickname || `微信账号${Date.now()}`
 
-      await accountStore.addAccount({
+      const saved = await accountStore.addAccount({
         name,
         code: result.code,
         platform: 'wx',
         loginType: 'wx_qr',
         wxid: result.wxid || '',
       })
+      if (saved?.wxAutoReconnectReady === false) {
+        wxLoginStore.errorMessage = '自动连回凭据未保存，请重新扫码一次'
+        wxLoginStore.statusMessage = '账号已添加，自动连回暂不可用'
+        return
+      }
       emit('saved')
       close()
     }
@@ -165,7 +170,7 @@ useModalFocus(() => props.show, modalSurface, close)
             class="border rounded-lg p-2"
             :style="{ borderColor: 'color-mix(in srgb, var(--theme-text) 20%, transparent)', background: '#fff' }"
           >
-            <img :src="qrImageSrc" class="h-48 w-48">
+            <img :src="qrImageSrc" alt="微信登录二维码" class="h-48 w-48">
           </div>
           <div
             v-else

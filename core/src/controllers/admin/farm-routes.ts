@@ -506,14 +506,22 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    // API: 获取背包种子列表
+    // API: 获取背包种子列表（含优先级/已知种子同步）
     app.get('/api/bag/seeds', async (req: Request, res: Response) => {
         const id = getAccId(ctx, req);
         if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
 
         try {
-            const data = await ctx.provider.getBagSeeds(id);
-            res.json({ ok: true, data });
+            const seeds = await ctx.provider.getBagSeeds(id);
+            const result = store.syncBagSeedPriority(id, seeds);
+            res.json({
+                ok: true,
+                data: {
+                    seeds: result.seeds,
+                    priority: result.priority,
+                    knownIds: result.knownIds,
+                },
+            });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -533,11 +541,11 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
     });
 
     // API: 启动账号
-    app.post('/api/accounts/:id/start', (req: Request, res: Response) => {
+    app.post('/api/accounts/:id/start', async (req: Request, res: Response) => {
         try {
             const accountId = resolveAccId(ctx, req.params.id);
 
-            const ok = ctx.provider.startAccount(accountId);
+            const ok = await ctx.provider.startAccount(accountId);
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
             }

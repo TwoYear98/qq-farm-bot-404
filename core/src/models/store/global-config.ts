@@ -2,6 +2,7 @@ import type { GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConf
 export {};
 
 const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
+const { normalizeWxKickoutRelogin } = require('../../services/wx-login/reconnect-config');
 
 const sharedState = require('./shared-state');
 
@@ -46,6 +47,12 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
     const msg = (src.msg !== undefined && src.msg !== null)
         ? String(src.msg).trim()
         : DEFAULT_OFFLINE_REMINDER.msg;
+    const rawReloginUrlMode = (src.reloginUrlMode !== undefined && src.reloginUrlMode !== null)
+        ? String(src.reloginUrlMode).trim().toLowerCase()
+        : DEFAULT_OFFLINE_REMINDER.reloginUrlMode;
+    const reloginUrlMode = ['none', 'qq_link', 'qr_link'].includes(rawReloginUrlMode)
+        ? rawReloginUrlMode
+        : DEFAULT_OFFLINE_REMINDER.reloginUrlMode;
     return {
         channel,
         endpoint,
@@ -53,6 +60,7 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
         secret,
         title,
         msg,
+        reloginUrlMode,
         offlineDeleteSec,
     };
 }
@@ -90,6 +98,7 @@ function normalizeLoginSettings(input: unknown): LoginSettings {
         qqQrLogin: typeof src.qqQrLogin === 'boolean' ? src.qqQrLogin : DEFAULT_LOGIN_SETTINGS.qqQrLogin,
         napCatEndpoint: typeof src.napCatEndpoint === 'string' ? src.napCatEndpoint.trim() : DEFAULT_LOGIN_SETTINGS.napCatEndpoint,
         napCatSignature: typeof src.napCatSignature === 'string' ? src.napCatSignature.trim() : DEFAULT_LOGIN_SETTINGS.napCatSignature,
+        wxKickoutRelogin: normalizeWxKickoutRelogin(src.wxKickoutRelogin),
     };
 }
 
@@ -98,7 +107,15 @@ function getLoginSettings(): LoginSettings {
 }
 
 function setLoginSettings(cfg: Partial<LoginSettings> | undefined): LoginSettings {
-    const next = normalizeLoginSettings({ ...getLoginSettings(), ...(cfg || {}) });
+    const current = getLoginSettings();
+    const merged: Record<string, any> = { ...current };
+    for (const [key, value] of Object.entries(cfg || {})) {
+        if (value !== undefined) merged[key] = value;
+    }
+    if (cfg?.wxKickoutRelogin && typeof cfg.wxKickoutRelogin === 'object') {
+        merged.wxKickoutRelogin = { ...current.wxKickoutRelogin, ...cfg.wxKickoutRelogin };
+    }
+    const next = normalizeLoginSettings(merged);
     if (next.qqQrLogin && (!next.napCatEndpoint || !next.napCatSignature)) {
         throw new Error('开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名');
     }

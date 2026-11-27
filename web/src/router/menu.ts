@@ -43,7 +43,7 @@ export const menuRoutes: MenuItem[] = [
     path: 'pet',
     name: 'pet',
     label: '宠物',
-    icon: 'i-fa-solid-paw',
+    icon: 'i-fas-paw',
     component: () => import('@/views/Pet.vue'),
     scenes: ['farm'],
   },
@@ -53,14 +53,6 @@ export const menuRoutes: MenuItem[] = [
     label: '活动',
     icon: 'i-carbon-gift',
     component: () => import('@/views/Activity.vue'),
-  },
-  {
-    path: 'ranch-strategy',
-    name: 'ranch-strategy',
-    label: '策略',
-    icon: 'i-carbon-settings-adjust',
-    component: () => import('@/views/RanchStrategy.vue'),
-    scenes: ['ranch'],
   },
   {
     path: 'shop',
